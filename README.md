@@ -1,93 +1,297 @@
 # tbc-terraform
 
+## Общая логика
+
+* **job** не срабатывают на **TAG**
+* `destroy` - ручное выполнение или по таймеру `on_stop` `auto_stop_in`
+  * production не имеет этапа `destroy`
+* `review != PROD_REF || INTEG_REF`
+* `integration = INTEG_REF`
+* `staging = PROD_REF + destroy`
+* `production = PROD_REF - destroy`
+
+| Имя переменной   | Значение | Действие GitLab                                      |
+|------------------|----------|------------------------------------------------------|
+| `*_ENABLED`      | `true`   | Включить job                                         |
+| `*_PLAN_ENABLED` | `false`  | Автоматический запуск ВСЕХ job<br>но отключение PLAN |
+| `*_PLAN_ENABLED` | `true`   | Ручной запуск по кнопке (manual)                     |
+
+### PLAN
+
+#### tf-plan-review
+План изменений для веток разработчиков.
+
+| № | Условие (if)                                              | Результат (если ИСТИНА)      | Описание логики                                        |
+|---|-----------------------------------------------------------|------------------------------|--------------------------------------------------------|
+| 1 | `$CI_COMMIT_TAG`                                          | when: never                  | Исключить запуск на тегах                              |
+| 2 | `$CI_COMMIT_REF_NAME =~ $PROD_REF \|\| ... =~ $INTEG_REF` | when: never                  | Исключить запуск в ветках интеграции и продакшена      |
+| 3 | `$TF_REVIEW_PLAN_ENABLED != "true"`                       | when: never                  | Исключить запуск, если создание плана review выключено |
+| 4 | `$TF_REVIEW_ENABLED == "true"`                            | when: on_success (по умолч.) | Авто-запуск, если общее review включено                |
+
+#### tf-plan-integration
+План изменений для интеграционной ветки.
+
+| № | Условие (if)                        | Результат (если ИСТИНА)      | Описание логики                                            |
+|---|-------------------------------------|------------------------------|------------------------------------------------------------|
+| 1 | `$CI_COMMIT_REF_NAME !~ $INTEG_REF` | when: never                  | Исключить запуск во всех ветках, кроме интеграционной      |
+| 2 | `$TF_INTEG_PLAN_ENABLED != "true"`  | when: never                  | Исключить запуск, если создание плана интеграции выключено |
+| 3 | `$TF_INTEG_ENABLED == "true"`       | when: on_success (по умолч.) | Авто-запуск, если интеграция включена                      |
+
+#### tf-plan-staging
+План изменений для окружения staging.
+
+| № | Условие (if)                         | Результат (если ИСТИНА)      | Описание логики                                         |
+|---|--------------------------------------|------------------------------|---------------------------------------------------------|
+| 1 | `$CI_COMMIT_REF_NAME !~ $PROD_REF`   | when: never                  | Исключить запуск во всех ветках, кроме ветки продакшена |
+| 2 | `$TF_STAGING_PLAN_ENABLED != "true"` | when: never                  | Исключить запуск, если создание плана staging выключено |
+| 3 | `$TF_STAGING_ENABLED == "true"`      | when: on_success (по умолч.) | Авто-запуск, если staging включен                       |
+
+#### tf-plan-production
+План изменений для финального продакшена.  
+Эта job сложнее остальных, так как умеет работать внутри Merge Request (MR) и переопределять внутренние переменные.
+
+| № | Условие (if)                                                                | Результат (если ИСТИНА)                                         | Описание логики                                                                                         |
+|---|-----------------------------------------------------------------------------|-----------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| 1 | `$CI_COMMIT_TAG`                                                            | when: never                                                     | Исключить запуск на тегах                                                                               |
+| 2 | `$TF_PROD_ENABLED != "true"`                                                | when: never                                                     | Исключить запуск, если продакшен выключен глобально                                                     |
+| 3 | `$TF_PROD_PLAN_ENABLED != "true"`                                           | when: never                                                     | Исключить запуск, если создание плана продакшена выключено                                              |
+| 4 | `$CI_OPEN_MERGE_REQUESTS`                                                   | when: on_success (по умолч.), Переменная: TF_PLAN_LOCK: "false" | Авто-запуск в открытых MR (для старого синтаксиса MR-пайплайнов). Отключает блокировку плана Terraform. |
+| 5 | `$CI_MERGE_REQUEST_ID && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $PROD_REF` | when: on_success (по умолч.), Переменная: TF_PLAN_LOCK: "false" | Авто-запуск в MR, которые направлены в продакшн-ветку. Отключает блокировку плана Terraform.            |
+| 6 | `$CI_COMMIT_REF_NAME =~ $PROD_REF`                                          | when: on_success (по умолч.)                                    | Авто-запуск непосредственно внутри самой продакшн-ветки (например, после слияния)                       |
+
+------------------------------
+### TEST
+
+`TF_TFTEST_STRATEGY`:
+* "single" — тесты запускаются строго в своей целевой ветке.
+* "cascading" (каскадная) — тесты могут «протекать» и в другие ветки (например, запускаться на интеграционной ветке, даже если это конфигурация для staging).
+
+| Имя переменной                     | Значение                              | Результат проверки  | Действие GitLab             |
+|------------------------------------|---------------------------------------|---------------------|-----------------------------|
+| `TF_TFTEST_STRATEGY`               | Любое, кроме "single" или "cascading" | Условие when: never | Job скрывается из пайплайна |
+| `*_ENABLED`                        | любая строка, кроме "true"            | Условие when: never | Job скрывается из пайплайна |
+| `!reference [.test-policy, rules]` |                                       | Описаны ниже        |
+
+#### tf-test-review
+Автоматическое тестирование в ветках разработчиков.
+
+| № | Условие (if)                                              | Результат (если ИСТИНА) | Описание логики                                                         |
+|---|-----------------------------------------------------------|-------------------------|-------------------------------------------------------------------------|
+| 1 | `$TF_TFTEST_STRATEGY != "single" && ... != "cascading"`   | when: never             | Исключить запуск, если стратегия тестирования не задана или некорректна |
+| 2 | `$CI_COMMIT_TAG`                                          | when: never             | Исключить запуск на Git-тегах                                           |
+| 3 | `$TF_REVIEW_ENABLED != "true"`                            | when: never             | Исключить запуск, если окружение review выключено                       |
+| 4 | `$CI_COMMIT_REF_NAME =~ $PROD_REF \|\| ... =~ $INTEG_REF` | when: never             | Исключить запуск в интеграционных и продакшн ветках                     |
 
 
-## Getting started
+#### tf-test-integration
+Автоматическое тестирование в интеграционной ветке.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+| № | Условие (if)                                                           | Результат (если ИСТИНА) | Описание логики                                                                                                             |
+|---|------------------------------------------------------------------------|-------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| 1 | `$TF_TFTEST_STRATEGY != "single" && ... != "cascading" `               | when: never             | Исключить запуск, если стратегия тестирования некорректна                                                                   |
+| 2 | `$CI_COMMIT_TAG`                                                       | when: never             | Исключить запуск на Git-тегах                                                                                               |
+| 3 | `$TF_INTEG_ENABLED != "true"`                                          | when: never             | Исключить запуск, если интеграционное окружение выключено                                                                   |
+| 4 | `$CI_COMMIT_REF_NAME =~ $PROD_REF`                                     | when: never             | Исключить запуск в продакшн-ветке                                                                                           |
+| 5 | `$TF_TFTEST_STRATEGY == "single" && $CI_COMMIT_REF_NAME !~ $INTEG_REF` | when: never             | Если выбрана стратегия single, тесты запустятся строго в ветке интеграции. В других ветках (например, review) job скроется. |
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+#### tf-test-staging
+Автоматическое тестирование в main. 
 
-## Add your files
+| № | Условие (if)                                                          | Результат (если ИСТИНА) | Описание логики                                                                                                                         |
+|---|-----------------------------------------------------------------------|-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| 1 | `$TF_TFTEST_STRATEGY != "single" && ... != "cascading"`               | when: never             | Исключить запуск, если стратегия тестирования некорректна                                                                               |
+| 2 | `$CI_COMMIT_TAG`                                                      | when: never             | Исключить запуск на Git-тегах                                                                                                           |
+| 3 | `$TF_STAGING_ENABLED != "true"`                                       | when: never             | Исключить запуск, если окружение staging выключено                                                                                      |
+| 4 | `$TF_TFTEST_STRATEGY == "single" && $CI_COMMIT_REF_NAME !~ $PROD_REF` | when: never             | Если стратегия single, запретить запуск везде, кроме продакшн-ветки. При стратегии cascading тесты могут запуститься и в других ветках. |
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+
+#### tf-test-production
+Финальное автоматическое тестирование продакшн-инфраструктуры.
+
+| № | Условие (if)                                                          | Результат (если ИСТИНА) | Описание логики                                                                 |
+|---|-----------------------------------------------------------------------|-------------------------|---------------------------------------------------------------------------------|
+| 1 | `$TF_TFTEST_STRATEGY != "single" && ... != "cascading"`               | when: never             | Исключить запуск, если стратегия тестирования некорректна                       |
+| 2 | `$CI_COMMIT_TAG`                                                      | when: never             | Исключить запуск на Git-тегах                                                   |
+| 3 | `$TF_PROD_ENABLED != "true"`                                          | when: never             | Исключить запуск, если продакшн выключен                                        |
+| 4 | `$TF_TFTEST_STRATEGY == "single" && $CI_COMMIT_REF_NAME !~ $PROD_REF` | when: never             | Если стратегия single, жестко заблокировать запуск везде, кроме продакшн-ветки. |
+
+------------------------------
+### APPLY
+
+| Имя переменной   | Значение | Действие GitLab                    |
+|------------------|----------|------------------------------------|
+| `*_ENABLED`      | `true`   | Включить job                       |
+| `*_PLAN_ENABLED` | `false`  | Автоматический запуск (on_success) |
+| `*_PLAN_ENABLED` | `true`   | Ручной запуск по кнопке (manual)   |
+
+#### tf-review
+Проверка кода в ветках разработчиков (feature-branches).
+
+| № | Условие (if)                                              | Результат (если ИСТИНА)      | Описание логики                                   |
+|---|-----------------------------------------------------------|------------------------------|---------------------------------------------------|
+| 1 | `$CI_COMMIT_TAG`                                          | when: never                  | Исключить запуск на тегах                         |
+| 2 | `$CI_COMMIT_REF_NAME =~ $PROD_REF \|\| ... =~ $INTEG_REF` | when: never                  | Исключить запуск в ветках интеграции и продакшена |
+| 3 | `$TF_REVIEW_ENABLED != "true"`                            | when: never                  | Исключить запуск, если job выключена глобально    |
+| 4 | `$TF_REVIEW_PLAN_ENABLED != "true"`                       | when: on_success (по умолч.) | Авто-запуск, если режим ручного плана отключен    |
+| 5 | `$CI_COMMIT_REF_NAME`                                     | when: manual                 | Ручной запуск (финальное условие-заглушка)        |
+
+#### tf-integration
+Тестирования кода после слияния в интеграционную ветку.
+
+| № | Условие (if)                        | Результат (если ИСТИНА)      | Описание логики                                       |
+|---|-------------------------------------|------------------------------|-------------------------------------------------------|
+| 1 | `$CI_COMMIT_REF_NAME !~ $INTEG_REF` | when: never                  | Исключить запуск во всех ветках, кроме интеграционной |
+| 2 | `$TF_INTEG_ENABLED != "true"`       | when: never                  | Исключить запуск, если job выключена глобально        |
+| 3 | `$TF_INTEG_PLAN_ENABLED != "true"`  | when: on_success (по умолч.) | Авто-запуск, если режим ручного плана отключен        |
+| 4 | `$CI_COMMIT_REF_NAME`               | when: manual                 | Ручной запуск (финальное условие-заглушка)            |
+
+#### tf-staging
+Предварительный деплй/проверка инфраструктуры staging из продакшн-ветки.
+
+| № | Условие (if)                         | Результат (если ИСТИНА)      | Описание логики                                         |
+|---|--------------------------------------|------------------------------|---------------------------------------------------------|
+| 1 | `$CI_COMMIT_REF_NAME !~ $PROD_REF`   | when: never                  | Исключить запуск во всех ветках, кроме ветки продакшена |
+| 2 | `$TF_STAGING_ENABLED != "true"`      | when: never                  | Исключить запуск, если job выключена глобально          |
+| 3 | `$TF_STAGING_PLAN_ENABLED != "true"` | when: on_success (по умолч.) | Авто-запуск, если режим ручного плана отключен          |
+| 4 | `$CI_COMMIT_REF_NAME`                | when: manual                 | Ручной запуск (финальное условие-заглушка)              |
+
+#### tf-production
+Применение изменений (apply) в продакшн-инфраструктуру.
+
+| № | Условие (if)                       | Результат (если ИСТИНА)      | Описание логики                                         |
+|---|------------------------------------|------------------------------|---------------------------------------------------------|
+| 1 | `$CI_COMMIT_REF_NAME !~ $PROD_REF` | when: never                  | Исключить запуск во всех ветках, кроме ветки продакшена |
+| 2 | `$TF_PROD_ENABLED != "true"`       | when: never                  | Исключить запуск, если job выключена глобально          |
+| 3 | `$TF_PROD_PLAN_ENABLED != "true"`  | when: on_success (по умолч.) | Авто-запуск, если режим ручного плана отключен          |
+| 4 | `$CI_COMMIT_REF_NAME`              | when: manual                 | Ручной запуск (финальное условие-заглушка)              |
+
+------------------------------
+### DELETE
+
+| Настройка параметра | Значение в коде     | Описание логики                       | Действие GitLab                              |
+|---------------------|---------------------|---------------------------------------|----------------------------------------------|
+| Режим запуска       | when: manual        | Только ручной клик по кнопке          | Ожидает подтверждения пользователя           |
+| Влияние на пайплайн | allow_failure: true | Ошибка удаления считается некритичной | Пайплайн остается зеленым/варнингом при сбое |
+| Глобальный флаг     | *_ENABLED != "true" | Если окружение в принципе выключено   | Job полностью скрывается                     |
+
+#### tf-destroy-review
+
+| № | Условие (if)                                                                                            | Результат (если ИСТИНА)           | Описание логики                                                                                                         |
+|---|---------------------------------------------------------------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| 1 | `$CI_COMMIT_TAG`                                                                                        | when: never                       | Исключить появление кнопки уничтожения на Git-тегах                                                                     |
+| 2 | `$TF_REVIEW_ENABLED == "true" && $CI_COMMIT_REF_NAME !~ $PROD_REF && $CI_COMMIT_REF_NAME !~ $INTEG_REF` | when: manual, allow_failure: true | Показывает кнопку удаления только в обычных рабочих ветках (feature-ветках) при условии, что review-окружение включено. |
+
+#### tf-destroy-integration
+
+| № | Условие (if)                                                       | Результат (если ИСТИНА)           | Описание логики                                                                                                                           |
+|---|--------------------------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| 1 | `$TF_INTEG_ENABLED == "true" && $CI_COMMIT_REF_NAME =~ $INTEG_REF` | when: manual, allow_failure: true | Показывает кнопку удаления строго внутри интеграционной ветки (например, develop) при условии, что интеграционное окружение активировано. |
+
+#### tf-destroy-staging
+
+| № | Условие (if)                                                        | Результат (если ИСТИНА)           | Описание логики                                                                                                                                                   |
+|---|---------------------------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1 | `$TF_STAGING_ENABLED == "true" && $CI_COMMIT_REF_NAME =~ $PROD_REF` | when: manual, allow_failure: true | Показывает кнопку удаления staging-инфраструктуры, но запускать её можно только находясь в продакшн-ветке (например, main/master) и при включенном флаге staging. |
+
+---
+
+|         |                                                                                                                                         |
+|---------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| state:  | `${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${ENV_TYPE}${TF_ENVIRONMENT_NAMESPACE}/${CI_COMMIT_REF_NAME}`               |
+| module: | `${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/terraform/modules/${TF_MODULE_NAME}/${TF_MODULE_SYSTEM}/${TF_MODULE_VERSION}/file` |
+
+### variables
+```yaml
+variables:
+  # default production ref name (pattern)
+  PROD_REF: /^(master|main)$/
+  # default integration ref name (pattern)
+  INTEG_REF: /^develop$/
+  # default release tag name (pattern)
+  RELEASE_REF: /^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\-\.]+)?(\+[a-zA-Z0-9\-\.]+)?$/
+  # Включение тестов вне зависимости от типа события (.test-policy:)
+  ADAPTIVE_PIPELINE_DISABLED: "true"
+```
+
+### stages
+```yaml
+stages:
+  - build                                # tf-tflint, tf-docs, tf-plan-review, tf-plan-integration, tf-plan-staging, tf-plan-production
+  - test                                 # tf-tfsec, tf-trivy, tf-tflint, tf-checkov, tf-infracost, tf-fmt, tf-validate, 
+                                         # tf-test-review, tf-test-integration, tf-test-staging, tf-test-production
+  - package-build                        # tf-docs
+  - package-test                         # Нет job
+  - infra                                # tf-review, tf-integration, tf-staging, tf-production, tf-destroy-review, tf-destroy-integration, tf-destroy-staging
+  - deploy                               # Нет job
+  - acceptance                           # Нет job
+  - publish                              # tf-publish-module
+  - infra-prod                           # tf-production
+  - production                           # Нет job
+```
+
+### extends
+```yaml
+extends:
+  .tf-base:
+    .tf-workspace:
+      .tf-create:
+        tf-review:
+        tf-integration:
+        tf-staging:
+        tf-production:
+      .tf-plan:
+        tf-plan-review:
+        tf-plan-integration:
+        tf-plan-staging:
+        tf-plan-production:
+      .tf-test:
+        tf-test-review:
+        tf-test-integration:
+        tf-test-staging:
+        tf-test-production:
+      .tf-destroy:
+        tf-destroy-review:
+        tf-destroy-integration:
+        tf-destroy-staging:
+    tf-tfsec:
+    tf-trivy:
+    tf-tflint:
+    tf-checkov:
+    tf-infracost:
+    tf-fmt:
+    tf-validate:
+    tf-docs:
+    tf-publish-module:
+```
+
+### workflow.rules
+
+```yaml
+.tbc-workflow-rules:
+  skip-back-merge:                            # Не запускать при обратном MR (из прод в feature)
+  prefer-mr-pipeline:                         # => when: never
+    - это обычный commit в ветку
+    - и для этой ветки уже есть открытый MR
+    - и ветка не prod и не integration
+  extended-skip-ci:                           # Поиск в CI_COMMIT_MESSAGE паттерна [skip ci on ...]
+    - "*tag" && $CI_COMMIT_TAG                # Не запускать на тэге
+    - "*branch" && $CI_COMMIT_BRANCH          # Не запускать при обычном коммите
+    - "*mr" && $CI_MERGE_REQUEST_ID           # Не запускать при MR
+    - "*default" && $CI_COMMIT_REF_NAME =~ $CI_DEFAULT_BRANCH  # Не запускать на ветке по умолчанию
+    - "*prod" && $CI_COMMIT_REF_NAME =~ $PROD_REF  # Не запускать на продакшене
+    - "*integ" && $CI_COMMIT_REF_NAME =~ $INTEG_REF # Не запускать на интеграции
+    - "*dev" && $CI_COMMIT_REF_NAME !~ $PROD_REF && $CI_COMMIT_REF_NAME !~ $INTEG_REF # Не запускать на продакшене и интеграции
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.fizn.ru/library/cicd/examples/tbc-terraform.git
-git branch -M main
-git push -uf origin main
+
+### .test-policy
+Правила применения тестирования
+```yaml
+.test-policy:
+  - Это обычный commit -> on_success
+  - ADAPTIVE_PIPELINE_DISABLED == "true" -> on_success
+  - Ветка интеграции или релиза -> on_success
+  - Это не MR и нет открытых -> manual && allow_failure=true
+  - '$CI_MERGE_REQUEST_TITLE =~ /^Draft:.*/' ->  on_success && allow_failure=true
+  - on_success
 ```
-
-## Integrate with your tools
-
-* [Set up project integrations](https://gitlab.fizn.ru/library/cicd/examples/tbc-terraform/-/settings/integrations)
-
-## Collaborate with your team
-
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.

@@ -1,0 +1,378 @@
+include:
+
+  - component: $CI_SERVER_FQDN/library/to-be-continuous/Terraform/gitlab-ci-terraform@main
+    inputs:
+      ## common
+      # description: the Docker image used to run Terraform CLI commands - **set the version required by your project**
+      # default: $TBC_DEFAULT_TF_IMAGE
+      # TF_IMAGE
+      image: $TBC_DEFAULT_TF_IMAGE
+      # description: Set to disable [GitLab managed Terraform State](https://docs.gitlab.com/user/infrastructure/iac/terraform_state/)
+      # default: false
+      # TF_GITLAB_BACKEND_DISABLED
+      gitlab-backend-disabled: false
+      # description: Terraform project root directory
+      # default: '.'
+      # TF_PROJECT_DIR
+      project-dir: "./src"
+      # description: Terraform (hook) scripts base directory (relative to `$TF_PROJECT_DIR`)
+      # default: '.'
+      # TF_SCRIPTS_DIR
+      scripts-dir: "."
+      # description: Terraform output directory (relative to `$TF_PROJECT_DIR`).
+      #        _Everything generated in this directory will be kept as job artifacts._
+      # default: 'tf-output'
+      # TF_OUTPUT_DIR
+      output-dir: "tf-output"
+      
+      ## init
+      # description: Default Terraform extra options (applies to all Terraform commands)
+      # default: ''
+      # TF_EXTRA_OPTS
+      extra-opts: ""
+      # description: Default Terraform extra [init options](https://developer.hashicorp.com/terraform/cli/commands/init)
+      # default: '-reconfigure'
+      # TF_INIT_OPTS
+      init-opts: ""
+      # description: Default Terraform project [workspace](https://developer.hashicorp.com/terraform/language/state/workspaces)
+      # default: ''
+      # TF_WORKSPACE
+      workspace: ""
+      # description: Default Terraform extra [plan options](https://developer.hashicorp.com/terraform/cli/commands/plan)
+      # default: ''
+      # TF_PLAN_OPTS
+      plan-opts: ""
+      # description: Default Terraform extra [apply options](https://developer.hashicorp.com/terraform/cli/commands/apply)
+      # default: ''
+      # TF_APPLY_OPTS
+      apply-opts: ""
+      # description: Default Terraform extra [destroy options](https://developer.hashicorp.com/terraform/cli/commands/destroy)
+      # default: ''
+      # TF_DESTROY_OPTS
+      destroy-opts: ""
+      # description: Extra [`apk add` options](https://www.mankier.com/8/apk)
+      # default: ''
+      # TF_APK_EXTRA_OPTS
+      apk-extra-opts: ""
+      
+      ## tfsec
+      # description: Enable tfsec
+      # default: false
+      # TF_TFSEC_ENABLED
+      tfsec-enabled: true
+      # description: tfsec docker image
+      # default: $TBC_DEFAULT_TF_TFSEC_IMAGE
+      # TF_TFSEC_IMAGE
+      tfsec-image: $TBC_DEFAULT_TF_TFSEC_IMAGE
+      # description: tfsec [options and args](https://aquasecurity.github.io/tfsec/latest/guides/usage/)
+      # default: '.'
+      # TF_TFSEC_ARGS
+      tfsec-args: "."
+      
+      ## trivy
+      # description: Disable trivy config checks
+      # default: false
+      # TF_TRIVY_DISABLED
+      trivy-disabled: false
+      # description: trivy docker image
+      # default: $TBC_DEFAULT_TF_TRIVY_IMAGE
+      # TF_TRIVY_IMAGE
+      trivy-image: $TBC_DEFAULT_TF_TRIVY_IMAGE
+      # description: trivy config [options and args](https://trivy.dev/docs/latest/references/configuration/cli/trivy_config/)
+      # default: '--disable-telemetry --skip-version-check .'
+      # TF_TRIVY_ARGS
+      trivy-args: "--tf-vars ./review.env.tfvars.json --disable-telemetry --skip-version-check ."
+      
+      ## checkov
+      # description: Enable checkov
+      # default: false
+      # TF_CHECKOV_ENABLED
+      checkov-enabled: false
+      # description: checkov docker image
+      # default: $TBC_DEFAULT_TF_CHECKOV_IMAGE
+      # TF_CHECKOV_IMAGE
+      checkov-image: $TBC_DEFAULT_TF_CHECKOV_IMAGE
+      # description: checkov [options and args](https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html)
+      # default: '--framework terraform'
+      # TF_CHECKOV_ARGS
+      checkov-args: "--framework terraform"
+      
+      ## infracost
+      # description: Enable infracost
+      # default: false
+      # TF_INFRACOST_ENABLED
+      infracost-enabled: false
+      # description: Infracost docker image
+      # default: $TBC_DEFAULT_TF_INFRACOST_IMAGE
+      # TF_INFRACOST_IMAGE
+      infracost-image: $TBC_DEFAULT_TF_INFRACOST_IMAGE
+      # description: infracost [CLI options and args](https://www.infracost.io/docs/#usage)
+      # default: 'breakdown'
+      # TF_INFRACOST_ARGS
+      infracost-args: "breakdown"
+      # description: infracost [usage file](https://www.infracost.io/docs/usage_based_resources/#infracost-usage-file)
+      # default: 'infracost-usage.yml'
+      # TF_INFRACOST_USAGE_FILE
+      infracost-usage-file: "infracost-usage.yml"
+      
+      ## tflint
+      # description: Disable tflint
+      # default: false
+      # TF_TFLINT_DISABLED
+      tflint-disabled: false
+      # description: Tflint docker image
+      # default: $TBC_DEFAULT_TF_TFLINT_IMAGE
+      # TF_TFLINT_IMAGE
+      tflint-image: $TBC_DEFAULT_TF_TFLINT_IMAGE
+      # description: tflint extra [options and args](https://github.com/terraform-linters/tflint/#usage)
+      # default: '--recursive'
+      # TF_TFLINT_ARGS
+      tflint-args: ""
+      # description: tflint [configuration file](https://github.com/terraform-linters/tflint/blob/master/docs/user-guide/config.md) (relative to `$TF_PROJECT_DIR`)
+      # default: '.tflint.hcl'
+      # TF_TFLINT_CONFIG_FILE
+      tflint-config-file: ".tflint.hcl"
+      # description: Github token used to access to Github API to download `tflint plugins` on GitHub avoiding hitting GitHub's rate limit for anonymous API requests.
+      # default: "$GITHUB_TOKEN"
+      # TF_TFLINT_GITHUB_TOKEN
+      tflint-github-token: "$GITHUB_TOKEN"
+      
+      ## fmt
+      # description: Enable fmt
+      # default: false
+      # TF_FMT_ENABLED
+      fmt-enabled: true
+      # description: terraform fmt extra [options](https://developer.hashicorp.com/terraform/cli/commands/fmt#usage)
+      # default: '-diff -recursive'
+      # TF_FMT_ARGS
+      fmt-args: "-diff -recursive"
+      
+      ## validate
+      # description: Enable validate
+      # default: false
+      # TF_VALIDATE_ENABLED
+      validate-enabled: true
+      
+      ## docs
+      # description: Enable terraform docs
+      # default: false
+      # TF_DOCS_ENABLED
+      docs-enabled: true
+      # description: '[terraform docs](https://terraform-docs.io/) container image'
+      # default: $TBC_DEFAULT_TF_DOCS_IMAGE
+      # TF_DOCS_IMAGE
+      docs-image: $TBC_DEFAULT_TF_DOCS_IMAGE
+      # description: Extra [terraform docs options](https://terraform-docs.io/reference/terraform-docs/)
+      # default: ''
+      # TF_DOCS_EXTRA_OPTS
+      docs-extra-opts: "--output-file ./README.md"
+      # description: terraform docs [configuration file](https://terraform-docs.io/user-guide/configuration/) (relative to `$TF_PROJECT_DIR`)
+      # default: '.terraform-docs.yml'
+      # TF_DOCS_CONFIG
+      docs-config: "./docs-template/.terraform-docs.yml"
+      # description: terraform docs output directory (relative to `$TF_PROJECT_DIR`)
+      # default: 'docs'
+      # TF_DOCS_OUTPUT_DIR
+      docs-output-dir: "docs"
+      
+      ## tftest
+      # description: terraform test strategy (one of: `disabled`, `single`, `cascading`)
+      # default: 'disabled'
+      # TF_TFTEST_STRATEGY
+      tftest-strategy: "cascading"
+      # description: terraform test extra [options and args](https://developer.hashicorp.com/terraform/cli/commands/test)
+      # default: ''
+      # TF_TFTEST_OPTS
+      tftest-opts: ""
+      
+      ## publish
+      # description: Enable publish module
+      # default: false
+      # TF_PUBLISH_ENABLED
+      publish-enabled: true
+      # description: container image used to publish module
+      # default: $TBC_DEFAULT_TF_PUBLISH_IMAGE
+      # TF_PUBLISH_IMAGE
+      publish-image: $TBC_DEFAULT_TF_PUBLISH_IMAGE
+      # description: The module name. May not contain any spaces or underscores.
+      # default: $CI_PROJECT_NAME
+      # TF_MODULE_NAME
+      module-name: "$CI_PROJECT_NAME"
+      # description: 'The module system or provider (example: `local`, `aws`, `google`)'
+      # default: 'local'
+      # TF_MODULE_SYSTEM
+      module-system: "local"
+      # description: The module version. It must be valid according to the [semantic versioning](https://semver.org/) specification.
+      # default: $CI_COMMIT_TAG
+      # TF_MODULE_VERSION
+      module-version: "$CI_COMMIT_TAG"
+      # description: 'Glob patterns matching files to include into the Terraform module (:warning: does not support double star)'
+      # default: '*.tf *.tpl *.md'
+      # TF_MODULE_FILES
+      module-files: "*.tf *.tpl *.md"
+      
+      ## environments (common)
+      # description: |-
+      #   Extra [GitLab environments](https://docs.gitlab.com/ci/environments/) namespace _(only required when deploying multiple environments)_
+      #   :warning: must start with a slash `/`
+      # default: ''
+      # TF_ENVIRONMENT_NAMESPACE
+      environment-namespace: ""
+      
+      ## review
+      # description: Enable Review
+      # default: false
+      # TF_REVIEW_ENABLED
+      review-enabled: true
+      # description: Terraform extra options for `review` env (applies to all Terraform commands) (only define to override default)
+      # default: ''
+      # TF_REVIEW_EXTRA_OPTS
+      review-extra-opts: ""
+      # description: Terraform extra [init options](https://developer.hashicorp.com/terraform/cli/commands/init) for `review` env (only define to override default)
+      # default: ''
+      # TF_REVIEW_INIT_OPTS
+      review-init-opts: ""
+      # description: Terraform project [workspace](https://developer.hashicorp.com/terraform/language/state/workspaces) for `review` env (only define to override default)
+      # default: ''
+      # TF_REVIEW_WORKSPACE
+      review-workspace: ""
+      # description: Set to enable separate Terraform plan job for `review` env.
+      # default: false
+      # TF_REVIEW_PLAN_ENABLED
+      review-plan-enabled: false
+      # description: Terraform extra [plan options](https://developer.hashicorp.com/terraform/cli/commands/plan) for `review` env (only define to override default)
+      # default: ''
+      # TF_REVIEW_PLAN_OPTS
+      review-plan-opts: ""
+      # description: Terraform extra [apply options](https://developer.hashicorp.com/terraform/cli/commands/apply) for `review` env (only define to override default)
+      # default: ''
+      # TF_REVIEW_APPLY_OPTS
+      review-apply-opts: ""
+      # description: Terraform extra [destroy options](https://developer.hashicorp.com/terraform/cli/commands/destroy) for `review` env (only define to override default)
+      # default: ''
+      # TF_REVIEW_DESTROY_OPTS
+      review-destroy-opts: ""
+      # description: The amount of time before GitLab will automatically stop `review` environments
+      # default: '4 hours'
+      # TF_REVIEW_AUTOSTOP_DURATION
+      review-autostop-duration: "10 minutes"
+      
+      ## integration
+      # description: Enable Integration
+      # default: false
+      # TF_INTEG_ENABLED
+      integ-enabled: true
+      # description: Terraform extra options for `integration` env (applies to all Terraform commands) (only define to override default)
+      # default: ''
+      # TF_INTEG_EXTRA_OPTS
+      integ-extra-opts: ""
+      # description: Terraform extra [init options](https://developer.hashicorp.com/terraform/cli/commands/init) for `integration` env (only define to override default)
+      # default: ''
+      # TF_INTEG_INIT_OPTS
+      integ-init-opts: ""
+      # description: Terraform project [workspace](https://developer.hashicorp.com/terraform/language/state/workspaces) for `integration` env (only define to override default)
+      # default: ''
+      # TF_INTEG_WORKSPACE
+      integ-workspace: ""
+      # description: Set to enable separate Terraform plan job for `integration` env.
+      # default: false
+      # TF_INTEG_PLAN_ENABLED
+      integ-plan-enabled: false
+      # description: Terraform extra [plan options](https://developer.hashicorp.com/terraform/cli/commands/plan) for `integration` env (only define to override default)
+      # default: ''
+      # TF_INTEG_PLAN_OPTS
+      integ-plan-opts: ""
+      # description: Terraform extra [apply options](https://developer.hashicorp.com/terraform/cli/commands/apply) for `integration` env (only define to override default)
+      # default: ''
+      # TF_INTEG_APPLY_OPTS
+      integ-apply-opts: ""
+      # description: Terraform extra [destroy options](https://developer.hashicorp.com/terraform/cli/commands/destroy) for `integration` env (only define to override default)
+      # default: ''
+      # TF_INTEG_DESTROY_OPTS
+      integ-destroy-opts: ""
+      # description: The amount of time before GitLab will automatically stop the `integration` env
+      # default: 'never'
+      # TF_INTEG_AUTOSTOP_DURATION
+      integ-autostop-duration: "10 minutes"
+      
+      ## staging
+      # description: Enable Staging
+      # default: false
+      # TF_STAGING_ENABLED
+      staging-enabled: true
+      # description: Terraform extra options for `staging` env (applies to all Terraform commands) (only define to override default)
+      # default: ''
+      # TF_STAGING_EXTRA_OPTS
+      staging-extra-opts: ""
+      # description: Terraform extra [init options](https://developer.hashicorp.com/terraform/cli/commands/init) for `staging` env (only define to override default)
+      # default: ''
+      # TF_STAGING_INIT_OPTS
+      staging-init-opts: ""
+      # description: Terraform project [workspace](https://developer.hashicorp.com/terraform/language/state/workspaces) for `staging` env (only define to override default)
+      # default: ''
+      # TF_STAGING_WORKSPACE
+      staging-workspace: ""
+      # description: Set to enable separate Terraform plan job for `staging` env.
+      # default: false
+      # TF_STAGING_PLAN_ENABLED
+      staging-plan-enabled: false
+      # description: Terraform extra [plan options](https://developer.hashicorp.com/terraform/cli/commands/plan) for `staging` env (only define to override default)
+      # default: ''
+      # TF_STAGING_PLAN_OPTS
+      staging-plan-opts: ""
+      # description: Terraform extra [apply options](https://developer.hashicorp.com/terraform/cli/commands/apply) for `staging` env (only define to override default)
+      # default: ''
+      # TF_STAGING_APPLY_OPTS
+      staging-apply-opts: ""
+      # description: Terraform extra [destroy options](https://developer.hashicorp.com/terraform/cli/commands/destroy) for `staging` env (only define to override default)
+      # default: ''
+      # TF_STAGING_DESTROY_OPTS
+      staging-destroy-opts: ""
+      # description: The amount of time before GitLab will automatically stop the `staging` env
+      # default: 'never'
+      # TF_STAGING_AUTOSTOP_DURATION
+      staging-autostop-duration: "10 minutes"
+      
+      ## production
+      # description: Enable Production
+      # default: false
+      # TF_PROD_ENABLED
+      prod-enabled: false
+      # description: Terraform extra options for `production` env (applies to all Terraform commands) (only define to override default)
+      # default: ''
+      # TF_PROD_EXTRA_OPTS
+      prod-extra-opts: ""
+      # description: Terraform extra [init options](https://developer.hashicorp.com/terraform/cli/commands/init) for `production` env (only define to override default)
+      # default: ''
+      # TF_PROD_INIT_OPTS
+      prod-init-opts: ""
+      # description: Terraform project [workspace](https://developer.hashicorp.com/terraform/language/state/workspaces) for `production` env (only define to override default)
+      # default: ''
+      # TF_PROD_WORKSPACE
+      prod-workspace: ""
+      # description: Set to enable separate Terraform plan job for `production` env.
+      # default: true
+      # TF_PROD_PLAN_ENABLED
+      prod-plan-enabled: true
+      # description: Terraform extra [plan options](https://developer.hashicorp.com/terraform/cli/commands/plan) for `production` env (only define to override default)
+      # default: ''
+      # TF_PROD_PLAN_OPTS
+      prod-plan-opts: ""
+      # description: Terraform extra [apply options](https://developer.hashicorp.com/terraform/cli/commands/apply) for `production` env (only define to override default)
+      # default: ''
+      # TF_PROD_APPLY_OPTS
+      prod-apply-opts: ""
+      # description: Terraform extra [destroy options](https://developer.hashicorp.com/terraform/cli/commands/destroy) for `production` env (only define to override default)
+      # default: ''
+      # TF_PROD_DESTROY_OPTS
+      prod-destroy-opts: ""
+
+stages:
+  - build                                # tf-tflint, tf-docs, tf-plan-review, tf-plan-integration, tf-plan-staging, tf-plan-production
+  - test                                 # tf-tfsec, tf-trivy, tf-tflint, tf-checkov, tf-infracost, tf-fmt, tf-validate, 
+                                         # tf-test-review, tf-test-integration, tf-test-staging, tf-test-production
+  - package-build                        # tf-docs
+  - infra                                # tf-review, tf-integration, tf-staging, tf-production, tf-destroy-review, tf-destroy-integration, tf-destroy-staging
+  - publish                              # tf-publish-module
+  - infra-prod                           # tf-production
+

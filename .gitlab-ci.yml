@@ -1,0 +1,42 @@
+
+include:
+  - local: '.gitlab-ci.terraform-example.yml'
+  - component: $CI_SERVER_FQDN/library/cicd/auto-gitlab/auto-release@main
+  
+stages:
+  - build                                # tf-tflint, tf-docs, tf-plan-review, tf-plan-integration, tf-plan-staging, tf-plan-production
+  - test                                 # tf-tfsec, tf-trivy, tf-tflint, tf-checkov, tf-infracost, tf-fmt, tf-validate, 
+                                         # tf-test-review, tf-test-integration, tf-test-staging, tf-test-production
+  - package-build                        # tf-docs
+  - infra                                # tf-review, tf-integration, tf-staging, tf-production, tf-destroy-review, tf-destroy-integration, tf-destroy-staging
+  - publish                              # tf-publish-module
+  - infra-prod                           # tf-production
+  - auto-gitlab
+  
+variables:
+  CI_DEBUG_TRACE: "true"
+  TF_VAR_api_secret_token: "реальный-очень-секретный-токен"
+  
+# auto-gitlab/auto-release
+
+.auto-gitlab:auto-core:public:needs:
+  - job: tf-review
+    optional: true
+  - job: tf-integration
+    optional: true
+  - job: tf-staging
+    optional: true
+  - job: tf-production
+    optional: true
+  - job: tf-publish-module
+    optional: true
+
+.auto-gitlab:auto-release:public:RELEASE-md:
+  - |
+    cat > RELEASE.md <<EOF
+    ### Release ${CI_COMMIT_TAG}
+    * [🚀 **Релиз**](${CI_PROJECT_URL}/-/releases/permalink/latest)
+    * [**Релиз** Зеркало](https://github.com/FZEN475/library.cicd.examples.tbc-terraform.git)
+    * [**Релиз** Зеркало (tag)](https://github.com/FZEN475/library.cicd.examples.tbc-terraform/tree/${CI_COMMIT_TAG})
+      
+    EOF
